@@ -2688,6 +2688,211 @@ function SenetGame() {
 }
 
 
+function useChess(mode) {
+  const pvp = mode === 'pvp';
+  const INIT = [
+    ['r','n','b','q','k','b','n','r'],
+    ['p','p','p','p','p','p','p','p'],
+    [null,null,null,null,null,null,null,null],
+    [null,null,null,null,null,null,null,null],
+    [null,null,null,null,null,null,null,null],
+    [null,null,null,null,null,null,null,null],
+    ['P','P','P','P','P','P','P','P'],
+    ['R','N','B','Q','K','B','N','R']
+  ];
+
+  const [board, setBoard] = useState(INIT.map(r=>[...r]));
+  const [turn, setTurn] = useState('w');
+  const [sel, setSel] = useState(null);
+  const [hints, setHints] = useState([]);
+  const [over, setOver] = useState(null);
+  const [status, setStatus] = useState('\u0425\u0456\u0434 \u0431\u0456\u043b\u0438\u0445 (\u0412\u0438).');
+  const [thinking, setThinking] = useState(false);
+  const [lastMove, setLastMove] = useState(null);
+
+  const isW = p => p && p === p.toUpperCase();
+  const isB = p => p && p !== p.toUpperCase();
+  const owned = useCallback((p, c) => c === 'w' ? isW(p) : isB(p), []);
+
+  const getRawMoves = useCallback((b, r, c, col) => {
+    const p = b[r][c]; if (!p) return [];
+    const mv = [];
+    const pt = p.toLowerCase();
+    const inB = (r,c) => r>=0&&r<8&&c>=0&&c<8;
+    const push = (tr,tc) => { if(inB(tr,tc) && !owned(b[tr][tc],col)) mv.push([tr,tc]); };
+    const slide = (dr,dc) => {
+      let nr=r+dr,nc=c+dc;
+      while(inB(nr,nc)){
+        if(owned(b[nr][nc],col)) break;
+        mv.push([nr,nc]);
+        if(b[nr][nc]) break;
+        nr+=dr; nc+=dc;
+      }
+    };
+    const up = col==='w'?-1:1;
+    const sr = col==='w'?6:1;
+    if(pt==='p'){
+      if(inB(r+up,c)&&!b[r+up][c]){
+        mv.push([r+up,c]);
+        if(r===sr&&!b[r+2*up][c]) mv.push([r+2*up,c]);
+      }
+      for(const dc of[-1,1]) if(inB(r+up,c+dc)&&b[r+up][c+dc]&&!owned(b[r+up][c+dc],col)) mv.push([r+up,c+dc]);
+    }
+    else if(pt==='n') for(const[dr,dc] of[[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) push(r+dr,c+dc);
+    else if(pt==='b') { slide(-1,-1);slide(-1,1);slide(1,-1);slide(1,1); }
+    else if(pt==='r') { slide(-1,0);slide(1,0);slide(0,-1);slide(0,1); }
+    else if(pt==='q') { slide(-1,-1);slide(-1,1);slide(1,-1);slide(1,1);slide(-1,0);slide(1,0);slide(0,-1);slide(0,1); }
+    else if(pt==='k') for(const[dr,dc] of[[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]) push(r+dr,c+dc);
+    return mv;
+  }, [owned]);
+
+  const isInCheck = useCallback((b, col) => {
+    const kp = col==='w'?'K':'k';
+    let kr=-1,kc=-1;
+    for(let r=0;r<8;r++) for(let c=0;c<8;c++) if(b[r][c]===kp){kr=r;kc=c;}
+    if(kr<0) return true;
+    const opp = col==='w'?'b':'w';
+    for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+      if(!owned(b[r][c],opp)) continue;
+      if(getRawMoves(b,r,c,opp).some(([mr,mc])=>mr===kr&&mc===kc)) return true;
+    }
+    return false;
+  }, [getRawMoves, owned]);
+
+  const getLegal = useCallback((b, r, c, col) => {
+    return getRawMoves(b,r,c,col).filter(([tr,tc])=>{
+      const nb=b.map(row=>[...row]); nb[tr][tc]=nb[r][c]; nb[r][c]=null;
+      return !isInCheck(nb,col);
+    });
+  }, [getRawMoves, isInCheck]);
+
+  const evalBoard = useCallback((b) => {
+    const v={p:1,n:3,b:3,r:5,q:9,k:0};
+    let s=0;
+    for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+      const p=b[r][c]; if(!p) continue;
+      const val=v[p.toLowerCase()]||0;
+      const cb = (p.toLowerCase()==='p'||p.toLowerCase()==='n') ? (0.05*(3.5-Math.abs(r-3.5))*(3.5-Math.abs(c-3.5))) : 0;
+      s+=isW(p)?(val+cb):-(val+cb);
+    }
+    return s;
+  },[isW]);
+
+  const minimax = useCallback((b,depth,alpha,beta,maxP)=>{
+    if(depth===0) return evalBoard(b);
+    const col=maxP?'w':'b';
+    const moves=[];
+    for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+      if(!owned(b[r][c],col)) continue;
+      for(const[tr,tc] of getLegal(b,r,c,col)) moves.push([r,c,tr,tc]);
+    }
+    if(!moves.length) return isInCheck(b,col)?(maxP?-999:999):0;
+    if(maxP){
+      let best=-Infinity;
+      for(const[r,c,tr,tc] of moves){
+        const nb=b.map(row=>[...row]); nb[tr][tc]=nb[r][c]; nb[r][c]=null;
+        if((nb[tr][tc]==='P')&&(tr===0)) nb[tr][tc]='Q';
+        best=Math.max(best,minimax(nb,depth-1,alpha,beta,false));
+        alpha=Math.max(alpha,best); if(beta<=alpha) break;
+      }
+      return best;
+    } else {
+      let best=Infinity;
+      for(const[r,c,tr,tc] of moves){
+        const nb=b.map(row=>[...row]); nb[tr][tc]=nb[r][c]; nb[r][c]=null;
+        if((nb[tr][tc]==='p')&&(tr===7)) nb[tr][tc]='q';
+        best=Math.min(best,minimax(nb,depth-1,alpha,beta,true));
+        beta=Math.min(beta,best); if(beta<=alpha) break;
+      }
+      return best;
+    }
+  },[owned,getLegal,evalBoard,isInCheck]);
+
+  const handleClick = useCallback((r,c)=>{
+    if(over||thinking) return;
+    if(!pvp&&turn==='b') return;
+    const p=board[r][c];
+    if(sel){
+      const mv=hints.find(([hr,hc])=>hr===r&&hc===c);
+      if(mv){
+        const nb=board.map(row=>[...row]);
+        if((board[sel[0]][sel[1]].toLowerCase()==='p')&&(r===0||r===7)) nb[r][c]=turn==='w'?'Q':'q';
+        else nb[r][c]=nb[sel[0]][sel[1]];
+        nb[sel[0]][sel[1]]=null;
+        setBoard(nb); setSel(null); setHints([]); setLastMove([[sel[0],sel[1]],[r,c]]);
+        const next=turn==='w'?'b':'w';
+        const allMoves=[];
+        for(let rr=0;rr<8;rr++) for(let cc=0;cc<8;cc++){
+          if(!owned(nb[rr][cc],next)) continue;
+          allMoves.push(...getLegal(nb,rr,cc,next));
+        }
+        if(!allMoves.length){
+          if(isInCheck(nb,next)){ setOver(turn); setStatus('\u041c\u0430\u0442! \u041f\u0435\u0440\u0435\u043c\u043e\u0433\u0430.'); }
+          else { setOver('draw'); setStatus('\u041f\u0430\u0442! \u041d\u0456\u0447\u0438\u044f.'); }
+          return;
+        }
+        setTurn(next);
+        if(!pvp&&next==='b'){
+          setThinking(true); setStatus('\u0428\u0406 \u043e\u0431\u0434\u0443\u043c\u0443\u0454...');
+          setTimeout(()=>{
+            const bmoves=[];
+            for(let rr=0;rr<8;rr++) for(let cc=0;cc<8;cc++){
+              if(!owned(nb[rr][cc],'b')) continue;
+              for(const[tr2,tc2] of getLegal(nb,rr,cc,'b')) bmoves.push([rr,cc,tr2,tc2]);
+            }
+            if(!bmoves.length){setThinking(false);return;}
+            let best=Infinity,bestMove=bmoves[Math.floor(Math.random()*bmoves.length)];
+            for(const[r0,c0,tr2,tc2] of bmoves){
+              const nb2=nb.map(row=>[...row]); nb2[tr2][tc2]=nb2[r0][c0]; nb2[r0][c0]=null;
+              if((nb2[tr2][tc2]==='p')&&(tr2===7)) nb2[tr2][tc2]='q';
+              const v=minimax(nb2,2,-Infinity,Infinity,true);
+              const noisyV = v + (Math.random()*0.1 - 0.05);
+              if(noisyV<best){best=noisyV;bestMove=[r0,c0,tr2,tc2];}
+            }
+            const[r0,c0,tr2,tc2]=bestMove;
+            const nb2=nb.map(row=>[...row]); nb2[tr2][tc2]=nb2[r0][c0]; nb2[r0][c0]=null;
+            if((nb2[tr2][tc2]==='p')&&(tr2===7)) nb2[tr2][tc2]='q';
+            setBoard(nb2); setLastMove([[r0,c0],[tr2,tc2]]);
+            const wMoves=[];
+            for(let rr=0;rr<8;rr++) for(let cc=0;cc<8;cc++){
+              if(!owned(nb2[rr][cc],'w')) continue;
+              wMoves.push(...getLegal(nb2,rr,cc,'w'));
+            }
+            if(!wMoves.length){
+              if(isInCheck(nb2,'w')) { setOver('b'); setStatus('\u0428\u0406 \u043f\u043e\u0441\u0442\u0430\u0432\u0438\u0432 \u0432\u0430\u043c \u043c\u0430\u0442!'); }
+              else { setOver('draw'); setStatus('\u041f\u0430\u0442! \u041d\u0456\u0447\u0438\u044f!'); }
+            } else setStatus('\u0425\u0456\u0434 \u0431\u0456\u043b\u0438\u0445.');
+            setTurn('w'); setThinking(false);
+          }, 100);
+        } else setStatus(next==='w'?'\u0425\u0456\u0434 \u0431\u0456\u043b\u0438\u0445.':'\u0425\u0456\u0434 \u0447\u043e\u0440\u043d\u0438\u0445.');
+        return;
+      }
+      setSel(null); setHints([]);
+    }
+    if(owned(p,turn)){
+      const mv=getLegal(board,r,c,turn);
+      if(mv.length){setSel([r,c]);setHints(mv);}
+    }
+  },[over,thinking,pvp,turn,board,sel,hints,getLegal,isInCheck,owned,minimax]);
+
+  const reset=useCallback(()=>{
+    const INIT_R = [
+      ['r','n','b','q','k','b','n','r'],
+      ['p','p','p','p','p','p','p','p'],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      ['P','P','P','P','P','P','P','P'],
+      ['R','N','B','Q','K','B','N','R']
+    ];
+    setBoard(INIT_R);setTurn('w');setSel(null);setHints([]);
+    setOver(null);setStatus('\u0425\u0456\u0434 \u0431\u0456\u043b\u0438\u0445 (\u0412\u0438).');setThinking(false);setLastMove(null);
+  },[]);
+
+  return{board,turn,sel,hints,over,status,thinking,pvp,lastMove,handleClick,reset};
+}
+
 const PIECE_UNICODE = {
   K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙',
   k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟',
