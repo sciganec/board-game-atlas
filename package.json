@@ -1,0 +1,20 @@
+{
+  "name": "board-game-atlas",
+  "version": "1.0.0",
+  "description": "Всесвітній атлас настільних ігор — 36 ігор, SUBIT-класифікація, 9 ігрових столів із ШІ",
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js --watch",
+    "serve": "npx serve dist"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.4"
+  }
+}
